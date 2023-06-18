@@ -141,6 +141,7 @@ def chatGPT_response(text):
     )
     response_text = response.choices[0]["message"]["content"].strip()
     print(response_text)
+    print(user_character)
     return response_text
 
 #Whisperで音声を認識してchatGPTに流す
@@ -165,7 +166,6 @@ def profiele_file_write(file_content):
 def profiele_file_read():
     with open(f"user_profile/user_profiele.text", 'rb') as f:
         profiele = f.read()
-        print(profiele)
     return profiele 
 
 def interview_file_write(file_content):
