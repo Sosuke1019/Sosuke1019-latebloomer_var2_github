@@ -2,7 +2,7 @@
 ハッカソンで作成した"latebloomer"というLINE Botの改良版 (gitを使用してデプロイしたバージョン)
 
 ログイン
-```
+``` shell
 $ heroku login -a latebloomer-var2-github
 ```
 
