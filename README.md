@@ -3,7 +3,7 @@
 
 ログイン
 ``` shell
-$ heroku login -a latebloomer-var2-github
+$ heroku login
 ```
 
 停止・スタート
