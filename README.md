@@ -9,11 +9,11 @@ $ heroku login
 停止・スタート
 ``` shell
 # 停止 
-$ heroku ps:scale web=0 -a latebloomer-ver2-github
+$ heroku ps:scale web=0 -a latebloomer-ver2-git
 # 再度スタート
-$ heroku ps:scale web=1 -a latebloomer-ver2-github
+$ heroku ps:scale web=1 -a latebloomer-ver2-git
 #リスタート
-$ heroku restart -a latebloomer-ver2-github
+$ heroku restart -a latebloomer-ver2-git
 ```
 
 変更
@@ -26,7 +26,7 @@ $ git push heroku master
 ログ出力
 ```shell
 # 通常の確認
-$ heroku logs -a latebloomer-ver2-github
+$ heroku logs -a latebloomer-ver2-git
 # リアルタイムで確認
-$ heroku logs --tail -a latebloomer-ver2-github
+$ heroku logs --tail -a latebloomer-ver2-git
 ```
