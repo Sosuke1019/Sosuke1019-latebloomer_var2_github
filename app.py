@@ -1,7 +1,11 @@
 import os
 import openai
 from flask import Flask, request, abort
-
+import boto3
+from gtts import gTTS
+import requests
+import pyshorteners
+import botocore
 
 from linebot import (
     LineBotApi, WebhookHandler
@@ -20,9 +24,9 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ['LINE_CHANNEL_ACCESS_TOKEN']
 LINE_CHANNEL_SECRET = os.environ['LINE_CHANNEL_SECRET']
 API_KEY = os.environ['API_KEY']
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)    
-handler = WebhookHandler(LINE_CHANNEL_SECRET)   
-openai.api_key = API_KEY 
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+openai.api_key = API_KEY
 # api_key = config.Google_API_KEY # GoogleTTS APIキーの設定
 
 
@@ -82,15 +86,14 @@ def handle_message(event):
         )
         return
     
-    profiele_file_write(text_message.text)
+    profile_file_write(text_message.text)
 
     if text_message.text == "終了":
         line_bot_api.reply_message(
         event.reply_token, TextSendMessage(text="終了します。")
         )
-        os.remove(f"user_profiele/user_profiele.text")
+        os.remove(f"user_profile/user_profile.text")
         os.remove(f"interview/interview_log.text")
-
 
  
 @handler.add(MessageEvent, message= AudioMessage)
@@ -104,16 +107,34 @@ def handle_message(event):
     interview_file_write("user:"+user_question)
     response_text = chatGPT_response(user_question)
     reply_message = TextSendMessage(text=response_text)
+    #reply_message_to_audio(reply_message, message_id, api_key)
+    text_to_speech(reply_message, message_id)
     interview_file_write("interviewer:"+response_text)
 
-    # メッセージを返信する
-    line_bot_api.reply_message(event.reply_token, reply_message)
+    # アップロードする音声ファイルの情報
+    s3_file_path = f"line_response_audio/{message_id}.m4a"  # アップロードするファイルのパス
+    bucket_name = 'latebloomer-var2'  # バケット名
+    object_name = f'{message_id}.m4a' 
+
+    # 音声ファイルをAmazon S3にアップロード
+    upload_to_s3(s3_file_path, bucket_name, object_name)
+    # HTTPSのリンクを取得
+    audio_url =  get_s3_https_link(bucket_name, object_name)
+    short_url = shorten_url(audio_url)
+    # メッセージとURLを返信する
+    line_bot_api.reply_message(event.reply_token, [TextSendMessage(text=response_text),TextSendMessage(text=short_url)])
+    # テキストメッセージのみ返信
+    # line_bot_api.reply_message(event.reply_token, reply_message)
+    # 音声のみ返信
+    # line_bot_api.reply_message(event.reply_token, TextSendMessage(text=short_url))
+    send_voice_message(line_bot_api,message_id,audio_url)
     os.remove(f"{message_id}.m4a")
+    os.remove(f"line_response_audio/{message_id}.m4a")
 
 def chatGPT_response(text):
 
     print("chatGPT_response起動")
-    user_character = profiele_file_read()
+    user_character = profile_file_read()
     interview_log = interview_file_read()
     GPT_character = '''
         あなたは新卒採用を行う面接官です。あなたは日本のIT業界に所属しています。
@@ -130,7 +151,7 @@ def chatGPT_response(text):
     {interview_log}
     '''
     response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
+    model="gpt-3.5-turbo-0613",
     messages=[
         {"role": "system", "content": GPT_character},
         {"role": "system", "content": User_character_prompt},
@@ -148,9 +169,11 @@ def STT_whisper(message_id):
     print("STT_whisper起動")
     print(message_id)
     message_content = line_bot_api.get_message_content(message_id)
+    # 書き込み専用モードでファイルを開く
     with open(f"{message_id}.m4a", 'wb') as fd:
         fd.write(message_content.content)
         audio_path = fd.name
+    # 読み込み専用モードでファイルを開く
     with open(f"{message_id}.m4a", "rb") as fd:
         transcript = openai.Audio.transcribe("whisper-1", fd)
         user_question = transcript["text"]
@@ -158,14 +181,15 @@ def STT_whisper(message_id):
 
     return user_question
 
-def profiele_file_write(file_content):
-    with open(f"user_profile/user_profiele.text", 'wb') as f:
+def profile_file_write(file_content):
+    with open(f"user_profile/user_profile.text", 'wb') as f:
+        print(file_content.encode('utf-8'))
         f.write(file_content.encode('utf-8'))
 
-def profiele_file_read():
-    with open(f"user_profile/user_profiele.text", 'rb') as f:
-        profiele = f.read()
-    return profiele 
+def profile_file_read():
+    with open(f"user_profile/user_profile.text", 'rb') as f:
+        profile = f.read()
+    return profile
 
 def interview_file_write(file_content):
     with open(f"interview/interview_log.text", 'wb') as f:
@@ -176,6 +200,61 @@ def interview_file_read():
         interview_log = f.read()
     return interview_log
 
+# 変更箇所
+def text_to_speech(text_message, message_id):
+    text = text_message.text
+    tts = gTTS(text=text, lang='ja')  
+    output_file = f"line_response_audio/{message_id}.m4a"
+    tts.save(output_file)
+
+def upload_to_s3(file_path, bucket_name, object_name):
+    s3 = boto3.client('s3')
+    s3.upload_file(file_path, bucket_name, object_name)
+    print(f"File uploaded to Amazon S3: s3://{bucket_name}/{object_name}")
+
+def get_s3_https_link(bucket_name, object_name):
+    session = botocore.session.Session()
+    session.set_default_client_config(botocore.config.Config(
+        signature_version='s3v4',
+        s3={'addressing_style': 'path'},
+    ))
+    session._session = botocore.httpsession.URLLib3Session()
+    s3 = boto3.client('s3')
+    params = {'Bucket': bucket_name, 'Key': object_name}
+    url = s3.generate_presigned_url('get_object', Params=params, ExpiresIn=3600)
+    print(f"HTTPS Link: {url}")
+    return url
+
+def delete_from_s3(bucket_name, object_name):
+    s3 = boto3.client('s3')
+    s3.delete_object(Bucket=bucket_name, Key=object_name)
+    print(f"File deleted from Amazon S3: s3://{bucket_name}/{object_name}")
+
+#音声メッセージを送信する
+def send_voice_message(channel_access_token, user_id, audio_url):
+    url = 'https://api.line.me/v2/bot/message/push'
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {channel_access_token}'
+    }
+    data = {
+        'to': user_id,
+        'messages': [
+            {
+                'type': 'audio',
+                'originalContentUrl': audio_url,
+                'duration': 60000
+            }
+        ]
+    }
+    response = requests.post(url, headers=headers, json=data)
+    print(response.json())
+
+def shorten_url(url):
+    s = pyshorteners.Shortener()
+    short_url = s.tinyurl.short(url)
+    print(short_url)
+    return short_url
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT"))
